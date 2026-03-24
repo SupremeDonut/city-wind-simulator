@@ -10,6 +10,7 @@ wheels/
 # Geometry cache
 geometry/tile_cache/
 geometry/cache/
+assets/
 
 # C++/CUDA build artifacts
 simulation/src/build/
