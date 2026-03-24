@@ -32,3 +32,8 @@ target_link_libraries(cnpy PUBLIC ZLIB::ZLIB)
 add_executable(lbm_cuda main.cu lbm_kernels.cu)
 target_link_libraries(lbm_cuda PRIVATE cnpy)
 target_include_directories(lbm_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# ── CUDA performance flags ──────────────────────────────────────────────────
+target_compile_options(lbm_cuda PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+)

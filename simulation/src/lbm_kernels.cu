@@ -3,8 +3,8 @@
 #include <cstdio>
 
 // Thread block dimensions
-static constexpr int BX = 16;
-static constexpr int BY = 8;
+static constexpr int BX = 32;
+static constexpr int BY = 4;
 static constexpr int BZ = 2;
 
 // Helper: linear index in ZYX order
@@ -14,6 +14,7 @@ __device__ __forceinline__ int idx3(int x, int y, int z, int NX, int NY) {
 
 // ─── Kernel 1: Collide + Stream (BGK, two-lattice) ────────────────────────
 
+__launch_bounds__(256, 2)
 __global__ void collide_stream_kernel(
     const float* __restrict__ f_in,
     float*       __restrict__ f_out,
@@ -94,6 +95,7 @@ __global__ void collide_stream_kernel(
 //                    are passed but never dereferenced.
 
 template <bool WriteMacro>
+__launch_bounds__(256, 2)
 __global__ void collide_stream_macro_kernel(
     const float* __restrict__ f_in,
     float*       __restrict__ f_out,

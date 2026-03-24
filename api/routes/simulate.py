@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+import lz4.frame
 import sys
 import uuid
 from pathlib import Path
@@ -38,8 +39,12 @@ def _build_snapshot_msg(
     vel_f16 = vel.astype(np.float16)
     comfort_f16 = comfort.astype(np.float16)
 
-    vel_b64 = base64.b64encode(vel_f16.tobytes()).decode()
-    comfort_b64 = base64.b64encode(comfort_f16.tobytes()).decode()
+    vel_b64 = base64.b64encode(
+        lz4.frame.compress(vel_f16.tobytes(), compression_level=0)
+    ).decode()
+    comfort_b64 = base64.b64encode(
+        lz4.frame.compress(comfort_f16.tobytes(), compression_level=0)
+    ).decode()
 
     vel_flat = vel.reshape(-1)
     v_min = float(np.min(vel_flat))
@@ -54,10 +59,12 @@ def _build_snapshot_msg(
             "min": v_min,
             "max": v_max,
             "domain": [float(d) for d in domain],
+            "encoding": "lz4+float16",
         },
         "comfortMap": {
             "data": comfort_b64,
             "shape": [int(Nx), int(Ny)],
+            "encoding": "lz4+float16",
         },
     }
 

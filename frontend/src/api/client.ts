@@ -1,3 +1,4 @@
+import * as LZ4 from "lz4js";
 import type {
     VelocityField,
     Preset,
@@ -8,18 +9,24 @@ import type {
 
 const API_BASE = "http://localhost:8000";
 
-function b64ToFloat32(b64: string): Float32Array {
+function b64ToFloat32(b64: string, encoding?: string): Float32Array {
     const bin = atob(b64);
-    const buf = new ArrayBuffer(bin.length);
-    const u8 = new Uint8Array(buf);
+    let u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    // Data is float16 — decode to float32
+
+    // Decompress if lz4-compressed — u8 is now raw float16 bytes
+    if (encoding === "lz4+float16") {
+        u8 = LZ4.decompress(u8);
+    }
+
+    // u8 may be a view with non-zero byteOffset — slice to get aligned buffer
+    const buf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
     const u16 = new Uint16Array(buf);
     const f32 = new Float32Array(u16.length);
     for (let i = 0; i < u16.length; i++) {
         const h = u16[i];
         const sign = (h >> 15) & 1;
-        const exp = (h >> 10) & 0x1f;
+        const exp  = (h >> 10) & 0x1f;
         const frac = h & 0x3ff;
         if (exp === 0) {
             // subnormal or zero
@@ -53,7 +60,7 @@ export async function predict(
     const json = await res.json();
 
     const velocityField: VelocityField = {
-        data: b64ToFloat32(json.velocityField.data),
+        data: b64ToFloat32(json.velocityField.data, json.velocityField.encoding),
         shape: json.velocityField.shape,
         min: json.velocityField.min,
         max: json.velocityField.max,
@@ -61,7 +68,7 @@ export async function predict(
     };
 
     const comfortMap: ComfortMap = {
-        data: b64ToFloat32(json.comfortMap.data),
+        data: b64ToFloat32(json.comfortMap.data, json.comfortMap.encoding),
         shape: json.comfortMap.shape,
     };
 
@@ -106,28 +113,28 @@ export async function simulateLBM(
             callbacks.onProgress(msg.value);
         } else if (msg.type === "snapshot") {
             const velocityField: VelocityField = {
-                data: b64ToFloat32(msg.velocityField.data),
+                data: b64ToFloat32(msg.velocityField.data, msg.velocityField.encoding),
                 shape: msg.velocityField.shape,
                 min: msg.velocityField.min,
                 max: msg.velocityField.max,
                 domain: msg.velocityField.domain,
             };
             const comfortMap: ComfortMap = {
-                data: b64ToFloat32(msg.comfortMap.data),
+                data: b64ToFloat32(msg.comfortMap.data, msg.comfortMap.encoding),
                 shape: msg.comfortMap.shape,
             };
             callbacks.onSnapshot({ velocityField, comfortMap });
         } else if (msg.type === "done") {
             if (msg.velocityField && msg.comfortMap) {
                 const velocityField: VelocityField = {
-                    data: b64ToFloat32(msg.velocityField.data),
+                    data: b64ToFloat32(msg.velocityField.data, msg.velocityField.encoding),
                     shape: msg.velocityField.shape,
                     min: msg.velocityField.min,
                     max: msg.velocityField.max,
                     domain: msg.velocityField.domain,
                 };
                 const comfortMap: ComfortMap = {
-                    data: b64ToFloat32(msg.comfortMap.data),
+                    data: b64ToFloat32(msg.comfortMap.data, msg.comfortMap.encoding),
                     shape: msg.comfortMap.shape,
                 };
                 callbacks.onSnapshot({ velocityField, comfortMap });
