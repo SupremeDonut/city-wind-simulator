@@ -1,0 +1,18 @@
+CompileFlags:
+  CompilationDatabase: build
+
+  # Strip NVCC-specific flags clangd can't parse
+  Remove:
+    - -forward-unknown-to-host-compiler
+    - --generate-code=*
+    - -Xcompiler*
+    - --expt-*
+    - -arch=*
+    - -rdc=*
+    - --cuda-gpu-arch=*
+
+  # GPU arch and CUDA language mode
+  Add:
+    - --cuda-gpu-arch=sm_89
+    - -x
+    - cuda

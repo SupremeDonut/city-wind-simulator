@@ -1,0 +1,17 @@
+[project]
+name = "api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.135.1",
+    "uvicorn[standard]>=0.34.0",
+    "numpy>=2.0",
+    "pydantic>=2.12.5",
+    "lbm",
+    "h5py>=3.16.0",
+]
+
+[tool.uv.sources]
+lbm = { workspace = true }

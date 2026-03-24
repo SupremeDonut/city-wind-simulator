@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# Geometry cache
+geometry/tile_cache/
+geometry/cache/
+
+# C++/CUDA build artifacts
+simulation/src/build/
+
+# Simulation output artifacts
+api/results/
+*.npz
+*.gif
+
+# Frontend
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+node_modules
+dist-ssr
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

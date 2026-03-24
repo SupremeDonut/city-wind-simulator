@@ -1,0 +1,16 @@
+[project]
+name = "lbm"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "h5py>=3.16.0",
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.3",
+    "pillow>=12.1.1",
+    "pyvista>=0.47.1",
+    "scipy>=1.17.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["lbm*"]
