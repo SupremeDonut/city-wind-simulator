@@ -30,6 +30,7 @@ def _create_dataloaders(cfg: TrainConfig) -> tuple[DataLoader, DataLoader, DataL
         train_frac=cfg.train_frac,
         val_frac=cfg.val_frac,
         data_dir=cfg.data_dir,
+        cache_in_ram=cfg.cache_in_ram,
     )
     train_ds = WindFieldDataset(split="train", **common)
     val_ds = WindFieldDataset(split="val", **common)
@@ -40,7 +41,7 @@ def _create_dataloaders(cfg: TrainConfig) -> tuple[DataLoader, DataLoader, DataL
     loader_kwargs = dict(
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
-        pin_memory=True,
+        pin_memory=cfg.num_workers == 0,  # pin_memory with workers=0 is fine; avoid with multiprocessing on Windows
         persistent_workers=cfg.num_workers > 0,
     )
     train_loader = DataLoader(train_ds, shuffle=True, **loader_kwargs)
@@ -153,6 +154,14 @@ def train(cfg: TrainConfig | None = None, model_cfg: ModelConfig | None = None):
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,} ({n_params * 4 / 1e6:.1f} MB float32)")
 
+    if cfg.use_compile:
+        try:
+            import triton  # noqa: F401 — available on Linux; not on Windows
+            print("Compiling model with torch.compile (first batch will be slow)...")
+            model = torch.compile(model)  # VRAM: negligible overhead (~50–100 MB for compiled graph)
+        except ImportError:
+            print("torch.compile skipped — Triton is not available on Windows. Continuing without it.")
+
     # Optimiser + scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
@@ -259,15 +268,35 @@ def train(cfg: TrainConfig | None = None, model_cfg: ModelConfig | None = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train FNO surrogate model")
+    parser = argparse.ArgumentParser(
+        description="Train FNO surrogate model",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # Core
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--width", type=int, default=32, help="FNO hidden width")
-    parser.add_argument("--n-layers", type=int, default=4, help="Number of Fourier layers")
-    parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision")
-    parser.add_argument("--no-checkpoint", action="store_true", help="Disable gradient checkpointing (uses more VRAM, faster if VRAM allows)")
     parser.add_argument("--patience", type=int, default=15)
+
+    # Model architecture
+    parser.add_argument("--width", type=int, default=32,
+                        help="FNO hidden channel width")
+    parser.add_argument("--n-layers", type=int, default=4,
+                        help="Number of Fourier layers")
+    parser.add_argument("--modes", type=int, default=6,
+                        help="Fourier modes in each spatial dim (Z/Y/X)")
+
+    # Speed / VRAM flags
+    parser.add_argument("--no-amp", action="store_true",
+                        help="Disable AMP mixed precision")
+    parser.add_argument("--no-checkpoint", action="store_true",
+                        help="[+~4 GB VRAM] Disable gradient checkpointing — faster steps if VRAM allows")
+    parser.add_argument("--compile", action="store_true",
+                        help="[+~100 MB VRAM] torch.compile the model — 10-30%% faster after warmup")
+    parser.add_argument("--cache-ram", action="store_true",
+                        help="[+~7 GB CPU RAM per preset] Cache full dataset in RAM — eliminates HDF5 I/O")
+
     args = parser.parse_args()
 
     train_cfg = TrainConfig(
@@ -276,8 +305,17 @@ def main():
         lr=args.lr,
         use_amp=not args.no_amp,
         patience=args.patience,
+        use_compile=args.compile,
+        cache_in_ram=args.cache_ram,
     )
-    model_cfg = ModelConfig(width=args.width, n_layers=args.n_layers, use_checkpoint=not args.no_checkpoint)
+    model_cfg = ModelConfig(
+        width=args.width,
+        n_layers=args.n_layers,
+        modes_z=args.modes,
+        modes_y=args.modes,
+        modes_x=args.modes,
+        use_checkpoint=not args.no_checkpoint,
+    )
 
     train(train_cfg, model_cfg)
 

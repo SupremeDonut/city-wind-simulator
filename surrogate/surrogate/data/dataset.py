@@ -33,15 +33,22 @@ class WindFieldDataset(Dataset):
         train_frac: float = 0.8,
         val_frac: float = 0.1,
         data_dir: Path | None = None,
+        cache_in_ram: bool = False,
     ):
         super().__init__()
         self.data_dir = data_dir or DATA_DIR
         self.split = split
         self._entries: list[tuple[str, int]] = []  # (preset_id, sample_index)
 
+        self.cache_in_ram = cache_in_ram
+
         # Pre-compute SDF for each preset's base occupancy
         self._sdf_cache: dict[str, np.ndarray] = {}
         self._occ_cache: dict[str, np.ndarray] = {}
+
+        # Optional full RAM cache: {preset_id: np.ndarray [N, D, H, W, 3] float32}
+        self._vel_cache: dict[str, np.ndarray] = {}
+        self._params_cache: dict[str, np.ndarray] = {}
 
         for pid in preset_ids:
             h5_path = self.data_dir / f"{pid}.h5"
@@ -69,6 +76,17 @@ class WindFieldDataset(Dataset):
 
             for idx in indices:
                 self._entries.append((pid, idx))
+
+            # RAM cache: load all samples for this preset into memory up front.
+            # Eliminates all HDF5 I/O during training at the cost of CPU RAM.
+            # Memory: ~50 MB per 1000 samples at float16 storage (float32 after cast).
+            # A full preset (288 samples) at 64×128×128×3 float32 ≈ 7 GB — check
+            # your RAM before enabling.  Use --cache-ram only if you have headroom.
+            if cache_in_ram:
+                with h5py.File(str(h5_path), "r") as hf:
+                    self._vel_cache[pid] = hf["velocity"][:n_total].astype(np.float32)
+                    self._params_cache[pid] = hf["params"][:n_total].astype(np.float32)
+                print(f"  Cached {pid} ({n_total} samples, {self._vel_cache[pid].nbytes / 1e6:.0f} MB)")
 
         # Pre-compute coordinate grids (shared across all samples)
         grid = CanonicalGrid()
@@ -122,16 +140,22 @@ class WindFieldDataset(Dataset):
             occupancy_mask:  (1, D, H, W)  float32
         """
         preset_id, sample_idx = self._entries[idx]
-        hf = self._get_h5(preset_id)
 
-        # Read params: [direction_rad, speed, roughness]
-        params = hf["params"][sample_idx]
+        if self.cache_in_ram:
+            # Zero-copy slices from pre-loaded numpy arrays
+            params = self._params_cache[preset_id][sample_idx]
+            vel = self._vel_cache[preset_id][sample_idx]  # already float32
+        else:
+            hf = self._get_h5(preset_id)
+            params = hf["params"][sample_idx]
+            # Cast to float32 regardless of on-disk dtype (supports float16 and float32 files)
+            vel = hf["velocity"][sample_idx].astype(np.float32)  # [D, H, W, 3]
+
         direction_rad = params[0]
         speed = params[1]
 
-        # Read velocity target: [D, H, W, 3] -> [3, D, H, W]
-        vel = hf["velocity"][sample_idx]  # [D, H, W, 3]
-        vel = vel.transpose(3, 0, 1, 2)  # [3, D, H, W]
+        # [D, H, W, 3] -> [3, D, H, W]
+        vel = vel.transpose(3, 0, 1, 2)
 
         # Build input channels
         occ = self._occ_cache[preset_id]   # [D, H, W]

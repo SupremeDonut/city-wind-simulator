@@ -21,9 +21,9 @@ DEFAULT_ROUGHNESS: float = 0.3
 class CanonicalGrid:
     """Fixed tensor dimensions for the FNO (powers of 2 for FFT efficiency)."""
 
-    depth: int = 64  # Z (vertical)
-    height: int = 128  # Y (north-south)
-    width: int = 128  # X (east-west)
+    depth: int = 32  # Z (vertical)
+    height: int = 64  # Y (north-south)
+    width: int = 64  # X (east-west)
 
 
 @dataclass
@@ -56,7 +56,9 @@ class ModelConfig:
     modes_y: int = 6  # Fourier modes retained in Y (out of 128)
     modes_x: int = 6  # Fourier modes retained in X (out of 128)
     projection_hidden: int = 128  # hidden dim in final projection MLP
-    use_checkpoint: bool = True   # gradient checkpointing on Fourier layers (saves ~4 GB VRAM)
+    use_checkpoint: bool = (
+        True  # gradient checkpointing on Fourier layers (saves ~4 GB VRAM)
+    )
     grid: CanonicalGrid = field(default_factory=CanonicalGrid)
 
 
@@ -72,7 +74,7 @@ class TrainConfig:
     warmup_epochs: int = 5
     # Batch
     batch_size: int = 4
-    num_workers: int = 2
+    num_workers: int = 0  # Windows: shared memory file mapping fails with >0 workers
     # Loss weights
     lambda_div: float = 0.1
     pedestrian_weight: float = 2.0  # extra weight on z=0..2 layers
@@ -84,6 +86,13 @@ class TrainConfig:
     # test_frac = 1 - train_frac - val_frac
     # Mixed precision
     use_amp: bool = True
+    # Speed options
+    use_compile: bool = (
+        False  # torch.compile — 10-30% faster, ~50-100 MB extra VRAM for compiled graph
+    )
+    cache_in_ram: bool = (
+        False  # load full dataset into CPU RAM — eliminates HDF5 I/O; ~7 GB RAM per preset at 64×128×128
+    )
     # Paths
     checkpoint_dir: Path = CHECKPOINT_DIR
     runs_dir: Path = RUNS_DIR

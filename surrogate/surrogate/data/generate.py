@@ -207,7 +207,7 @@ def _run_one(
     )
 
     vel = np.stack([result["ux"], result["uy"], result["uz"]], axis=-1).astype(
-        np.float32
+        np.float16
     )
     return _pad_to_canonical(vel, grid, fill=0.0)
 
@@ -334,7 +334,7 @@ def generate_dataset(
             hf.create_dataset(
                 "velocity",
                 shape=(n_samples, grid.depth, grid.height, grid.width, 3),
-                dtype=np.float32,
+                dtype=np.float16,
                 chunks=(1, grid.depth, grid.height, grid.width, 3),
                 compression="gzip",
                 compression_opts=4,
