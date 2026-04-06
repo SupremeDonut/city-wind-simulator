@@ -1,0 +1,26 @@
+[project]
+name = "surrogate"
+version = "0.1.0"
+description = "FNO surrogate model for urban wind simulation"
+requires-python = ">=3.13"
+dependencies = [
+    "torch>=2.11.0",
+    "h5py>=3.16.0",
+    "numpy>=2.0",
+    "tensorboard>=2.18.0",
+    "tqdm>=4.66.0",
+    "scipy>=1.14.0",
+    "lbm",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.setuptools.packages.find]
+include = ["surrogate*"]
+
+[tool.uv.sources]
+lbm = { workspace = true }
+torch = { index = "pytorch-cuda" }

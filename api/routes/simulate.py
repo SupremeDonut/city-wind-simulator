@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 import h5py
 
 from jobs import Job, JobStatus, store
-from models import PredictRequest
+from models import DEFAULT_ROUGHNESS, PredictRequest
 from simulation import PRESETS, generate, _downsample, _downsample_2d
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,6 @@ async def _run_job(
     preset_id: str,
     direction: float,
     speed: float,
-    roughness: float,
     resolution: float,
     num_steps: int = 3000,
     snapshot_interval: int = 200,
@@ -110,7 +109,7 @@ async def _run_job(
             preset_id,
             direction,
             speed,
-            roughness,
+            DEFAULT_ROUGHNESS,
             resolution,
             num_steps,
             progress_cb,
@@ -154,7 +153,6 @@ async def start_simulation(req: PredictRequest) -> dict:
             req.preset_id,
             p.direction,
             p.speed,
-            p.roughness,
             req.resolution,
             req.num_steps,
             req.snapshot_interval,

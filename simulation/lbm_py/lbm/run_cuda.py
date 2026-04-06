@@ -2,6 +2,18 @@
 
 Handles HDF5 loading, preprocessing (rotation + downsampling),
 binary stdin/stdout serialisation, and subprocess management.
+
+Single-shot mode (default)
+--------------------------
+Each call to ``run_cuda_lbm`` spawns a fresh ``lbm_cuda.exe`` process,
+pays the CUDA context init cost once, runs one simulation, and exits.
+
+Persistent mode
+---------------
+``PersistentLBMWorker`` spawns ``lbm_cuda.exe --persistent`` once and reuses
+it for many sequential simulations, amortising the CUDA context init cost
+(~200-500 ms) and ``cudaMalloc`` overhead (~50 ms) across all calls.
+Use this for batch data generation.  Thread-safe: one worker per thread.
 """
 
 import os
@@ -367,6 +379,264 @@ def run_cuda_simulation(
     domain[2] = float(vel.shape[0] * result["dx"])
 
     return vel, comfort, domain
+
+
+# ── Persistent worker ─────────────────────────────────────────────────────
+
+
+def _read_exact(pipe, n: int) -> bytes:
+    """Read exactly n bytes from a pipe, raising RuntimeError on short read."""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = pipe.read(n - len(buf))
+        if not chunk:
+            raise RuntimeError(
+                f"lbm_cuda.exe stdout closed unexpectedly after {len(buf)}/{n} bytes"
+            )
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+class PersistentLBMWorker:
+    """Long-lived lbm_cuda.exe subprocess that handles multiple simulations.
+
+    Spawns the solver once with ``--persistent``.  The CUDA context and device
+    memory allocations are reused across calls as long as grid dimensions stay
+    the same (always true within one preset during data generation).
+
+    Not thread-safe — create one instance per thread.
+
+    Usage::
+
+        worker = PersistentLBMWorker()
+        result = worker.run_lbm(voxel_path, angle_deg=45, wind_speed=5, ...)
+        result2 = worker.run_lbm(voxel_path, angle_deg=90, wind_speed=3, ...)
+        worker.close()
+
+    Or use as a context manager::
+
+        with PersistentLBMWorker() as worker:
+            result = worker.run_lbm(voxel_path, ...)
+    """
+
+    def __init__(self):
+        exe = find_exe()
+        self._proc = subprocess.Popen(
+            [str(exe), "--persistent"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self._stderr_lines: list[str] = []
+        self._progress_callback = None
+        self._lock = threading.Lock()  # serialise calls on this worker
+
+        # Drain stderr in a background daemon thread
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, daemon=True
+        )
+        self._stderr_thread.start()
+
+    def _drain_stderr(self):
+        for raw in self._proc.stderr:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line.startswith("PROGRESS"):
+                try:
+                    val = float(line.split()[1])
+                    cb = self._progress_callback
+                    if cb:
+                        cb(val)
+                except (IndexError, ValueError):
+                    pass
+            else:
+                self._stderr_lines.append(line)
+
+    def run_lbm(
+        self,
+        voxel_path: str,
+        angle_deg: float = 0.0,
+        wind_speed: float = 2.0,
+        roughness: float = 0.5,
+        pitch: float = 8.0,
+        num_steps: int = 500,
+        progress_callback=None,
+        snapshot_interval: int = 0,
+        snapshot_callback=None,
+    ) -> dict:
+        """Run one LBM simulation on the persistent worker.
+
+        Has the same signature and return value as ``run_cuda_lbm``.
+        Snapshots are not supported in persistent mode (snapshot_interval is ignored).
+        """
+        # Preprocessing (rotation + downsampling) — same as run_cuda_lbm
+        with h5py.File(voxel_path, "r") as hf:
+            occ = hf["occupancy"][:]
+            domain_size = hf["occupancy"].attrs["domain_size"]
+
+        native_pitch = domain_size[0] / occ.shape[2]
+        domain_z = float(domain_size[2])
+        factor = max(1, round(pitch / native_pitch))
+
+        orig_NZ, orig_NY, orig_NX = occ.shape
+        target_shape = (orig_NZ // factor, orig_NY // factor, orig_NX // factor)
+
+        voxel_rotation = (angle_deg + 180) % 360
+        occ = rotate_voxels(occ, voxel_rotation)
+        occ = downsample_block_max(occ, factor)
+        occ[0, :, :] = 1  # ground plane
+
+        NZ, NY, NX = occ.shape
+        N = NX * NY * NZ
+
+        header = struct.pack(
+            "<iiifffii",
+            NX, NY, NZ,
+            float(wind_speed), float(roughness), float(domain_z),
+            num_steps,
+            0,  # snapshot_interval disabled in persistent mode
+        )
+        payload = header + occ.astype(np.uint8).tobytes()
+
+        with self._lock:
+            self._progress_callback = progress_callback
+            try:
+                self._proc.stdin.write(payload)
+                self._proc.stdin.flush()
+            except BrokenPipeError:
+                stderr_out = "\n".join(self._stderr_lines)
+                raise RuntimeError(
+                    f"lbm_cuda.exe worker died (code {self._proc.returncode}).\n"
+                    f"stderr: {stderr_out}"
+                )
+
+            # Read exactly the expected output bytes
+            expected = 4 + N * (3 * 4 + 1)
+            stdout_bytes = _read_exact(self._proc.stdout, expected)
+            self._progress_callback = None
+
+        # Parse output — identical to run_cuda_lbm
+        lattice_to_phys = wind_speed / 0.06
+        dx_val = struct.unpack_from("<f", stdout_bytes, 0)[0]
+        off = 4
+        ux = np.frombuffer(stdout_bytes, dtype=np.float32, count=N, offset=off).reshape(NZ, NY, NX).copy()
+        off += N * 4
+        uy = np.frombuffer(stdout_bytes, dtype=np.float32, count=N, offset=off).reshape(NZ, NY, NX).copy()
+        off += N * 4
+        uz = np.frombuffer(stdout_bytes, dtype=np.float32, count=N, offset=off).reshape(NZ, NY, NX).copy()
+        off += N * 4
+        solid = np.frombuffer(stdout_bytes, dtype=np.uint8, count=N, offset=off).reshape(NZ, NY, NX).copy()
+
+        ux *= lattice_to_phys
+        uy *= lattice_to_phys
+        uz *= lattice_to_phys
+
+        ux = rotate_field_back(ux, voxel_rotation, target_shape)
+        uy = rotate_field_back(uy, voxel_rotation, target_shape)
+        uz = rotate_field_back(uz, voxel_rotation, target_shape)
+        ux, uy = _rotate_velocity_to_world(ux, uy, voxel_rotation)
+
+        return {"ux": ux, "uy": uy, "uz": uz, "solid": solid, "dx": dx_val}
+
+    def run_lbm_preloaded(
+        self,
+        occ: np.ndarray,
+        domain_z: float,
+        voxel_rotation: float,
+        target_shape: tuple[int, int, int],
+        wind_speed: float = 2.0,
+        roughness: float = 0.5,
+        num_steps: int = 500,
+        progress_callback=None,
+    ) -> dict:
+        """Run one LBM simulation with a pre-processed occupancy array.
+
+        Skips H5 file I/O, voxel rotation, and downsampling — use this when
+        the caller has already prepared the occupancy grid (e.g. data generation
+        where the same base geometry is reused across many parameter combinations).
+
+        Args:
+            occ:            Pre-rotated, downsampled occupancy [NZ, NY, NX] uint8.
+            domain_z:       Physical domain height in metres.
+            voxel_rotation: The rotation angle applied to occ (degrees), needed to
+                            rotate the velocity field back to world frame.
+            target_shape:   (NZ, NY, NX) of the *un-rotated* output grid for cropping.
+            wind_speed:     Reference wind speed at 10 m height (m/s).
+            roughness:      Aerodynamic roughness length z0 (m).
+            num_steps:      Number of LBM iterations.
+            progress_callback: Optional callable(float 0..1).
+        """
+        NZ, NY, NX = occ.shape
+        N = NX * NY * NZ
+
+        header = struct.pack(
+            "<iiifffii",
+            NX, NY, NZ,
+            float(wind_speed), float(roughness), float(domain_z),
+            num_steps, 0,
+        )
+        payload = header + occ.astype(np.uint8).tobytes()
+
+        with self._lock:
+            self._progress_callback = progress_callback
+            try:
+                self._proc.stdin.write(payload)
+                self._proc.stdin.flush()
+            except BrokenPipeError:
+                stderr_out = "\n".join(self._stderr_lines)
+                raise RuntimeError(
+                    f"lbm_cuda.exe worker died (code {self._proc.returncode}).\n"
+                    f"stderr: {stderr_out}"
+                )
+            expected = 4 + N * (3 * 4 + 1)
+            stdout_bytes = _read_exact(self._proc.stdout, expected)
+            self._progress_callback = None
+
+        lattice_to_phys = wind_speed / 0.06
+        dx_val = struct.unpack_from("<f", stdout_bytes, 0)[0]
+        off = 4
+        ux = np.frombuffer(stdout_bytes, dtype=np.float32, count=N, offset=off).reshape(NZ, NY, NX).copy(); off += N * 4
+        uy = np.frombuffer(stdout_bytes, dtype=np.float32, count=N, offset=off).reshape(NZ, NY, NX).copy(); off += N * 4
+        uz = np.frombuffer(stdout_bytes, dtype=np.float32, count=N, offset=off).reshape(NZ, NY, NX).copy(); off += N * 4
+        solid = np.frombuffer(stdout_bytes, dtype=np.uint8, count=N, offset=off).reshape(NZ, NY, NX).copy()
+
+        ux *= lattice_to_phys
+        uy *= lattice_to_phys
+        uz *= lattice_to_phys
+
+        ux = rotate_field_back(ux, voxel_rotation, target_shape)
+        uy = rotate_field_back(uy, voxel_rotation, target_shape)
+        uz = rotate_field_back(uz, voxel_rotation, target_shape)
+        ux, uy = _rotate_velocity_to_world(ux, uy, voxel_rotation)
+
+        return {"ux": ux, "uy": uy, "uz": uz, "solid": solid, "dx": dx_val}
+
+    def close(self, timeout: float = 10.0):
+        """Send the shutdown sentinel (NX=0 header) and wait for clean exit."""
+        try:
+            sentinel = struct.pack("<iiifffii", 0, 0, 0, 0.0, 0.0, 0.0, 0, 0)
+            self._proc.stdin.write(sentinel)
+            self._proc.stdin.flush()
+            self._proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            self._proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+
+    def kill(self):
+        """Immediately terminate the worker process."""
+        self._proc.kill()
+
+    @property
+    def is_alive(self) -> bool:
+        return self._proc.poll() is None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
 
 
 # ── CLI entry point ────────────────────────────────────────────────────────

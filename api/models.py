@@ -1,10 +1,12 @@
 from pydantic import BaseModel
 
+# Fixed aerodynamic roughness length z0 (m) used throughout the system
+DEFAULT_ROUGHNESS: float = 0.3
+
 
 class WindParams(BaseModel):
     direction: float   # degrees, 0=north clockwise
     speed: float       # m/s
-    roughness: float   # z0 metres
 
 
 class PredictRequest(BaseModel):

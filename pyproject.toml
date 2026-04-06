@@ -1,2 +1,2 @@
 [tool.uv.workspace]
-members = ["api", "geometry", "simulation/lbm_py"]
+members = ["api", "geometry", "simulation/lbm_py", "surrogate"]

@@ -1,8 +1,13 @@
+import logging
 import math
 from pathlib import Path
 
+from models import DEFAULT_ROUGHNESS
+
 import h5py
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 NATIVE_RESOLUTION = 2  # metres per voxel — matches HDF5 occupancy grid
 
@@ -38,7 +43,52 @@ PRESETS: dict[str, dict] = {
         "domainSize": _read_domain_size("tokyo"),
         "resolution": NATIVE_RESOLUTION,
     },
+    "paris": {
+        "id": "paris",
+        "name": "Haussmann Paris",
+        "description": "Radial boulevard layout",
+        "domainSize": _read_domain_size("paris"),
+        "resolution": NATIVE_RESOLUTION,
+    },
+    "shanghai": {
+        "id": "shanghai",
+        "name": "Shanghai Lujiazui",
+        "description": "Clustered supertalls with open river exposure",
+        "domainSize": _read_domain_size("shanghai"),
+        "resolution": NATIVE_RESOLUTION,
+    },
 }
+
+
+# ── ML Surrogate (lazy singleton) ────────────────────────────────────────
+_surrogate = None
+_surrogate_init_attempted = False
+
+
+def _get_surrogate():
+    """Lazily initialise the FNO surrogate model.
+
+    Returns None if the model weights are not available (falls back to
+    procedural generation).
+    """
+    global _surrogate, _surrogate_init_attempted
+    if _surrogate_init_attempted:
+        return _surrogate
+    _surrogate_init_attempted = True
+    try:
+        from surrogate.inference.predictor import WindSurrogate
+
+        _surrogate = WindSurrogate()
+        logger.info("FNO surrogate model loaded successfully")
+    except Exception as e:
+        logger.warning("FNO surrogate not available, using procedural fallback: %s", e)
+        _surrogate = None
+    return _surrogate
+
+
+def init_surrogate():
+    """Eagerly initialise the surrogate (call from app startup)."""
+    _get_surrogate()
 
 
 def _downsample(arr: np.ndarray, factor: int) -> np.ndarray:
@@ -74,17 +124,29 @@ def generate(
     preset_id: str,
     direction: float,
     speed: float,
-    roughness: float,
+    roughness: float = DEFAULT_ROUGHNESS,
     out_resolution: float = 8.0,  # metres per cell in returned arrays
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """
-    Python port of makeFakeVelocityField + deriveComfortMap.
+    Generate a velocity field for the given wind conditions.
+
+    Tries the trained FNO surrogate first; falls back to procedural
+    generation if model weights are not available.
 
     Returns:
         vel:     float32 ndarray, shape [Nz, Ny, Nx, 3]
         comfort: float32 ndarray, shape [Ny, Nx]
         domain:  [domX, domY, domZ] metres
     """
+    # Try ML surrogate first
+    surrogate = _get_surrogate()
+    if surrogate is not None:
+        try:
+            return surrogate.predict(preset_id, direction, speed)
+        except Exception as e:
+            logger.warning("Surrogate inference failed, falling back to procedural: %s", e)
+
+    # Procedural fallback
     preset = PRESETS[preset_id]
     domain: list[int] = preset["domainSize"]
     # Generate directly at the requested resolution; the native 2 m grid is only

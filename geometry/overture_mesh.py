@@ -162,16 +162,23 @@ if __name__ == "__main__":
     #     preset_id="manhattan",
     # )
     # export_preset_glb(
-    #     lat=37.7845,
-    #     lon=-122.4034,
+    #     lat=35.6938,
+    #     lon=139.7034,
     #     dist=500,
-    #     output_path="../assets/presets/san_francisco.glb",
-    #     preset_id="san_francisco",
+    #     output_path="../assets/presets/tokyo.glb",
+    #     preset_id="tokyo",
+    # )
+    # export_preset_glb(
+    #     lat=48.8698,
+    #     lon=2.3078,
+    #     dist=500,
+    #     output_path="../assets/presets/paris.glb",
+    #     preset_id="paris",
     # )
     export_preset_glb(
-        lat=35.6938,
-        lon=139.7034,
+        lat=31.2397,
+        lon=121.4988,
         dist=500,
-        output_path="../assets/presets/tokyo.glb",
-        preset_id="tokyo",
+        output_path="../assets/presets/shanghai.glb",
+        preset_id="shanghai",
     )

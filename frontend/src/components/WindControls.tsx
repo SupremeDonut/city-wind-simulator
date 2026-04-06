@@ -1,20 +1,11 @@
 import { useStore } from "../store/store";
 
-const ROUGHNESS_OPTIONS = [
-    { label: "Open sea", value: 0.01 },
-    { label: "Farmland", value: 0.03 },
-    { label: "Suburban", value: 0.1 },
-    { label: "Urban", value: 0.3 },
-    { label: "City center", value: 1.0 },
-];
-
 export function WindControls() {
     const windParams = useStore(s => s.windParams);
     const dirty = useStore(s => s.dirty);
     const jobState = useStore(s => s.jobState);
     const setWindDirection = useStore(s => s.setWindDirection);
     const setWindSpeed = useStore(s => s.setWindSpeed);
-    const setRoughness = useStore(s => s.setRoughness);
     const runPredict = useStore(s => s.runPredict);
     const runSimulation = useStore(s => s.runSimulation);
     const simProgress = useStore(s => s.simProgress);
@@ -137,24 +128,6 @@ export function WindControls() {
                     onChange={e => setWindSpeed(Number(e.target.value))}
                     className="w-full accent-blue-400"
                 />
-            </div>
-
-            {/* Roughness dropdown */}
-            <div>
-                <div className="text-gray-400 text-xs uppercase tracking-wide mb-2">
-                    Surface Roughness
-                </div>
-                <select
-                    value={windParams.roughness}
-                    onChange={e => setRoughness(Number(e.target.value))}
-                    className="w-full bg-gray-700 text-white text-sm rounded px-2 py-1 border border-gray-600"
-                >
-                    {ROUGHNESS_OPTIONS.map(opt => (
-                        <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                        </option>
-                    ))}
-                </select>
             </div>
 
             {/* Recalculate button */}

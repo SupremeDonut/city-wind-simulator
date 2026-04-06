@@ -1,0 +1,8 @@
+# Generated training data (large HDF5 files)
+/data/
+
+# Model checkpoints
+/checkpoints/
+
+# TensorBoard logs
+/runs/

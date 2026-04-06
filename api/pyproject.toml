@@ -10,9 +10,11 @@ dependencies = [
     "numpy>=2.0",
     "pydantic>=2.12.5",
     "lbm",
+    "surrogate",
     "h5py>=3.16.0",
     "lz4>=4.0.0",
 ]
 
 [tool.uv.sources]
 lbm = { workspace = true }
+surrogate = { workspace = true }

@@ -4,7 +4,7 @@ import lz4.frame
 import numpy as np
 from fastapi import APIRouter, HTTPException
 
-from models import PredictRequest
+from models import DEFAULT_ROUGHNESS, PredictRequest
 from simulation import PRESETS, generate
 
 router = APIRouter()
@@ -22,7 +22,7 @@ def predict(req: PredictRequest) -> dict:
         req.preset_id,
         p.direction,
         p.speed,
-        p.roughness,
+        DEFAULT_ROUGHNESS,
     )
 
     # vel shape: [Nz, Ny, Nx, 3] — float16 halves size, lz4 compresses 3-5x further

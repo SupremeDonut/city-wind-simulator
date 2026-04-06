@@ -10,7 +10,6 @@ export interface Preset {
 export interface WindParams {
   direction: number   // degrees, 0=north, clockwise
   speed: number       // m/s
-  roughness: number   // z0 roughness length in metres
 }
 
 export interface VelocityField {

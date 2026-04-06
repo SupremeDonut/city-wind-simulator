@@ -14,7 +14,6 @@ interface AppState {
   selectPreset: (p: Preset) => void
   setWindDirection: (deg: number) => void
   setWindSpeed: (speed: number) => void
-  setRoughness: (z0: number) => void
   runPredict: () => Promise<void>
   runSimulation: () => Promise<void>
   releaseVelocityData: () => void
@@ -23,7 +22,7 @@ interface AppState {
 export const useStore = create<AppState>((set, get) => ({
   presets: [],
   selectedPreset: null,
-  windParams: { direction: 270, speed: 5, roughness: 0.3 },
+  windParams: { direction: 270, speed: 5 },
   result: null,
   jobState: 'idle',
   dirty: false,
@@ -45,10 +44,6 @@ export const useStore = create<AppState>((set, get) => ({
 
   setWindSpeed: (speed) => {
     set(s => ({ windParams: { ...s.windParams, speed }, dirty: true }))
-  },
-
-  setRoughness: (z0) => {
-    set(s => ({ windParams: { ...s.windParams, roughness: z0 }, dirty: true }))
   },
 
   runPredict: async () => {
