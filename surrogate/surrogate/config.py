@@ -31,12 +31,13 @@ class DataGenConfig:
     """Configuration for the batch LBM data generation pipeline."""
 
     preset_ids: list[str] = field(default_factory=lambda: list(PRESET_IDS))
-    # Wind direction: 36 angles at 10-degree increments
-    n_directions: int = 36
-    # Wind speed: 8 values linearly spaced in [1, 15] m/s
-    speeds: list[float] = field(
-        default_factory=lambda: [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0]
-    )
+    # Wind direction: 72 angles at 5-degree increments
+    n_directions: int = 72
+    # Wind speed: single reference speed — velocity fields scale linearly with
+    # inflow speed (incompressible regime), so training on one speed is sufficient.
+    # At inference, predictions are multiplied by (requested_speed / training_speed).
+    training_speed: float = 7.0
+    speeds: list[float] = field(default_factory=lambda: [7.0])
     # Roughness: single fixed value (urban/suburban default)
     roughnesses: list[float] = field(default_factory=lambda: [DEFAULT_ROUGHNESS])
     pitch: float = 8.0  # metres per cell (matches LBM default)
@@ -48,7 +49,7 @@ class DataGenConfig:
 class ModelConfig:
     """FNO architecture hyperparameters."""
 
-    in_channels: int = 8  # occ, sdf, sin/cos dir, speed, z/y/x coords
+    in_channels: int = 7  # occ, sdf, sin/cos dir, z/y/x coords
     out_channels: int = 3  # ux, uy, uz
     width: int = 32  # hidden channel width in Fourier layers
     n_layers: int = 4  # number of Fourier layers

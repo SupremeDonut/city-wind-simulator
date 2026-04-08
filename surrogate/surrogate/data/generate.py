@@ -209,7 +209,7 @@ def _run_one(
     vel = np.stack([result["ux"], result["uy"], result["uz"]], axis=-1).astype(
         np.float16
     )
-    return _pad_to_canonical(vel, grid, fill=0.0)
+    return _pad_to_canonical(vel, grid, fill=0.0), occ
 
 
 # ── Main dataset generation function ──────────────────────────────────────
@@ -397,7 +397,7 @@ def generate_dataset(
                 direction, speed, roughness = combos[sample_idx]
 
                 try:
-                    vel_padded = fut.result()
+                    vel_padded, occ_rotated = fut.result()
                 except Exception as e:
                     error_count += 1
                     pbar.write(
@@ -407,8 +407,16 @@ def generate_dataset(
                     pbar.update(1)
                     continue
 
+                # Store the ROTATED occupancy that matches the velocity field.
+                # Previously stored base_occ_padded for all samples — that was
+                # a bug: the velocity was simulated with rotated buildings but
+                # the occupancy input showed un-rotated buildings.
+                occ_padded = _pad_to_canonical(
+                    occ_rotated[..., np.newaxis], grid, fill=0.0
+                )[..., 0].astype(np.uint8)
+
                 with write_lock:
-                    ds_occ[sample_idx] = base_occ_padded
+                    ds_occ[sample_idx] = occ_padded
                     ds_vel[sample_idx] = vel_padded
                     ds_params[sample_idx] = [math.radians(direction), speed, roughness]
                     n_done = ds_done.shape[0]

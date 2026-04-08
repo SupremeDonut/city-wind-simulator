@@ -89,7 +89,7 @@ export function Viewport3D() {
                 makeDefault
                 position={[200, -300, 150]}
                 up={[0, 0, 1]}
-
+                far={50000}
             />
             <OrbitControls target={[0, 0, 20]} />
             <ambientLight intensity={0.5} />

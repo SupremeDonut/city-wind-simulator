@@ -8,6 +8,36 @@ Implements:
 import torch
 
 
+def mse_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask_air: torch.Tensor,
+    pedestrian_weight: float = 2.0,
+) -> torch.Tensor:
+    """Weighted MSE loss over air voxels with pedestrian-layer emphasis.
+
+    MSE gives stronger gradients than relative L2 early in training when
+    predictions are far from the target, making it much easier to learn.
+
+    Args:
+        pred:   (B, 3, D, H, W) predicted velocity.
+        target: (B, 3, D, H, W) ground truth velocity.
+        mask_air: (B, 1, D, H, W) binary mask (1 = air, 0 = solid).
+        pedestrian_weight: Extra weight for z=0..2 (pedestrian level).
+
+    Returns:
+        Scalar loss.
+    """
+    # Build per-voxel weight: pedestrian layers (z=0,1,2) get extra weight
+    weight = torch.ones_like(mask_air)
+    weight[:, :, :3, :, :] = pedestrian_weight
+    weight = weight * mask_air  # only air cells
+
+    diff_sq = ((pred - target) ** 2) * weight
+    n_weighted = weight.sum() * pred.shape[1] + 1e-8  # num channels × weighted voxels
+    return diff_sq.sum() / n_weighted
+
+
 def relative_l2_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
@@ -15,6 +45,9 @@ def relative_l2_loss(
     pedestrian_weight: float = 2.0,
 ) -> torch.Tensor:
     """Relative L2 loss over air voxels with pedestrian-layer emphasis.
+
+    NOTE: This loss can stall early training at ~1.0 because gradients are
+    scale-invariant — prefer mse_loss for initial training.
 
     Args:
         pred:   (B, 3, D, H, W) predicted velocity.
@@ -100,7 +133,7 @@ def surrogate_loss(
     """
     mask_air = 1.0 - occupancy
 
-    l_data = relative_l2_loss(pred, target, mask_air, pedestrian_weight)
+    l_data = mse_loss(pred, target, mask_air, pedestrian_weight)
     l_div = divergence_loss(pred, mask_air)
 
     total = l_data + lambda_div * l_div

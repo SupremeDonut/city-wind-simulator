@@ -3,15 +3,14 @@
 Architecture:
     Lifting (Conv3d 1x1x1) -> N x FourierLayer -> Projection MLP -> Hard solid mask
 
-Input channels (8):
+Input channels (7):
     0: Occupancy grid (binary)
     1: Signed distance field from buildings
     2: sin(direction)   (broadcast)
     3: cos(direction)   (broadcast)
-    4: normalised speed (broadcast)
-    5: z / D  (spatial coordinate)
-    6: y / H  (spatial coordinate)
-    7: x / W  (spatial coordinate)
+    4: z / D  (spatial coordinate)
+    5: y / H  (spatial coordinate)
+    6: x / W  (spatial coordinate)
 
 Output: velocity field [B, 3, D, H, W]
 """

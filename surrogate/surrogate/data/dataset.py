@@ -10,20 +10,19 @@ import torch
 from scipy.ndimage import distance_transform_edt
 from torch.utils.data import Dataset
 
-from surrogate.config import DATA_DIR, CanonicalGrid
+from surrogate.config import DATA_DIR, CanonicalGrid, DataGenConfig
 
 
 class WindFieldDataset(Dataset):
     """Dataset of (input_tensor, velocity_target) pairs from HDF5 files.
 
-    Each sample constructs an 8-channel input tensor:
-        Ch 0:   Occupancy (binary)
-        Ch 1:   Signed distance field (positive outside, negative inside buildings)
+    Each sample constructs a 7-channel input tensor:
+        Ch 0:   Occupancy (binary) — per-sample rotated occupancy
+        Ch 1:   Signed distance field (computed per-sample from rotated occ)
         Ch 2-3: sin/cos of wind direction
-        Ch 4:   Normalised wind speed (speed / 15.0)
-        Ch 5-7: Spatial coordinates (z/D, y/H, x/W)
+        Ch 4-6: Spatial coordinates (z/D, y/H, x/W)
 
-    Target: velocity field [3, D, H, W] in m/s.
+    Target: velocity field [3, D, H, W] normalised by training_speed (unit-speed pattern).
     """
 
     def __init__(
@@ -42,13 +41,11 @@ class WindFieldDataset(Dataset):
 
         self.cache_in_ram = cache_in_ram
 
-        # Pre-compute SDF for each preset's base occupancy
-        self._sdf_cache: dict[str, np.ndarray] = {}
-        self._occ_cache: dict[str, np.ndarray] = {}
-
-        # Optional full RAM cache: {preset_id: np.ndarray [N, D, H, W, 3] float32}
+        # Optional full RAM cache: {preset_id: np.ndarray}
         self._vel_cache: dict[str, np.ndarray] = {}
         self._params_cache: dict[str, np.ndarray] = {}
+        self._occ_cache: dict[str, np.ndarray] = {}
+        self._sdf_cache: dict[str, np.ndarray] = {}
 
         for pid in preset_ids:
             h5_path = self.data_dir / f"{pid}.h5"
@@ -58,35 +55,41 @@ class WindFieldDataset(Dataset):
             with h5py.File(str(h5_path), "r") as hf:
                 n_total = hf["velocity"].attrs.get("n_written", hf["velocity"].shape[0])
                 n_total = int(n_total)
-                occ_sample = hf["occupancy"][0]  # same for all samples of this preset
 
-            # Compute SDF once per preset
-            self._occ_cache[pid] = occ_sample.astype(np.float32)
-            self._sdf_cache[pid] = self._compute_sdf(occ_sample)
+            # Split indices — shuffle with a fixed seed so train/val/test are
+            # consistent across runs but cover all directions/speeds in each split.
+            rng = np.random.default_rng(seed=42)
+            all_indices = np.arange(n_total)
+            rng.shuffle(all_indices)
 
-            # Split indices
             n_train = int(n_total * train_frac)
             n_val = int(n_total * val_frac)
             if split == "train":
-                indices = range(0, n_train)
+                indices = all_indices[:n_train]
             elif split == "val":
-                indices = range(n_train, n_train + n_val)
+                indices = all_indices[n_train : n_train + n_val]
             else:  # test
-                indices = range(n_train + n_val, n_total)
+                indices = all_indices[n_train + n_val :]
 
             for idx in indices:
                 self._entries.append((pid, idx))
 
-            # RAM cache: load all samples for this preset into memory up front.
-            # Eliminates all HDF5 I/O during training at the cost of CPU RAM.
-            # Memory: ~50 MB per 1000 samples at float16 storage (float32 after cast).
-            # A full preset (288 samples) at 64×128×128×3 float32 ≈ 7 GB — check
-            # your RAM before enabling.  Use --cache-ram only if you have headroom.
+            # RAM cache: load all data for this preset into memory up front.
+            # Each sample has its own rotated occupancy, so we cache occ + SDF
+            # per sample.
             if cache_in_ram:
                 with h5py.File(str(h5_path), "r") as hf:
                     self._vel_cache[pid] = hf["velocity"][:n_total].astype(np.float32)
                     self._params_cache[pid] = hf["params"][:n_total].astype(np.float32)
-                print(f"  Cached {pid} ({n_total} samples, {self._vel_cache[pid].nbytes / 1e6:.0f} MB)")
+                    occ_all = hf["occupancy"][:n_total]
+                self._occ_cache[pid] = occ_all.astype(np.float32)
+                # Pre-compute SDF for every sample
+                sdf_all = np.empty_like(self._occ_cache[pid])
+                for i in range(n_total):
+                    sdf_all[i] = self._compute_sdf(occ_all[i])
+                self._sdf_cache[pid] = sdf_all
+                mem_mb = (self._vel_cache[pid].nbytes + self._occ_cache[pid].nbytes + sdf_all.nbytes) / 1e6
+                print(f"  Cached {pid} ({n_total} samples, {mem_mb:.0f} MB)")
 
         # Pre-compute coordinate grids (shared across all samples)
         grid = CanonicalGrid()
@@ -135,47 +138,49 @@ class WindFieldDataset(Dataset):
         """Return (input_tensor, target_velocity, occupancy_mask).
 
         Shapes:
-            input_tensor:    (8, D, H, W)  float32
+            input_tensor:    (7, D, H, W)  float32
             target_velocity: (3, D, H, W)  float32
             occupancy_mask:  (1, D, H, W)  float32
         """
         preset_id, sample_idx = self._entries[idx]
 
         if self.cache_in_ram:
-            # Zero-copy slices from pre-loaded numpy arrays
             params = self._params_cache[preset_id][sample_idx]
             vel = self._vel_cache[preset_id][sample_idx]  # already float32
+            occ = self._occ_cache[preset_id][sample_idx]  # [D, H, W] float32
+            sdf = self._sdf_cache[preset_id][sample_idx]  # [D, H, W] float32
         else:
             hf = self._get_h5(preset_id)
             params = hf["params"][sample_idx]
-            # Cast to float32 regardless of on-disk dtype (supports float16 and float32 files)
-            vel = hf["velocity"][sample_idx].astype(np.float32)  # [D, H, W, 3]
+            vel = hf["velocity"][sample_idx].astype(np.float32)
+            occ = hf["occupancy"][sample_idx].astype(np.float32)
+            sdf = self._compute_sdf(occ)
 
         direction_rad = params[0]
-        speed = params[1]
 
         # [D, H, W, 3] -> [3, D, H, W]
         vel = vel.transpose(3, 0, 1, 2)
 
-        # Build input channels
-        occ = self._occ_cache[preset_id]   # [D, H, W]
-        sdf = self._sdf_cache[preset_id]   # [D, H, W]
+        # Normalise by training speed so the model learns a unit-speed flow
+        # pattern (free-stream ≈ 1.0).  At inference, multiply the model
+        # output by the requested speed to recover physical m/s.
+        training_speed = DataGenConfig().training_speed
+        vel = vel / training_speed
+
         grid = CanonicalGrid()
 
-        # Scalar parameter channels (broadcast to spatial dims)
+        # Direction channels (broadcast to spatial dims)
         sin_dir = np.full((1, grid.depth, grid.height, grid.width), np.sin(direction_rad), dtype=np.float32)
         cos_dir = np.full((1, grid.depth, grid.height, grid.width), np.cos(direction_rad), dtype=np.float32)
-        norm_speed = np.full((1, grid.depth, grid.height, grid.width), speed / 15.0, dtype=np.float32)
 
-        # Stack all 8 channels
+        # Stack 7 channels
         input_tensor = np.concatenate(
             [
-                occ[np.newaxis],   # Ch 0: occupancy
-                sdf[np.newaxis],   # Ch 1: SDF
+                occ[np.newaxis],   # Ch 0: occupancy (per-sample rotated)
+                sdf[np.newaxis],   # Ch 1: SDF (computed from rotated occ)
                 sin_dir,           # Ch 2: sin(dir)
                 cos_dir,           # Ch 3: cos(dir)
-                norm_speed,        # Ch 4: speed
-                self._coords,      # Ch 5-7: z, y, x coordinates
+                self._coords,      # Ch 4-6: z, y, x coordinates
             ],
             axis=0,
         )
